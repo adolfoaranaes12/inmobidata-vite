@@ -20,31 +20,74 @@ export const generatePropertyPDF = async (property) => {
   const title = property.title;
   pdf.text(title, pageWidth / 2, 30, { align: 'center' });
   
-  // Add property image if available
+  // Initial Y position for content after title
+  let yPos = 40;
+  
+  // Add property images (all available)
   if (property.images && property.images.length > 0) {
-    try {
-      // Create a temporary image element
-      const img = new Image();
-      img.crossOrigin = 'Anonymous'; // Handle CORS issues
-      img.src = property.images[0];
-      
-      await new Promise((resolve) => {
-        img.onload = resolve;
-      });
-      
-      // Add image to PDF
-      const imgWidth = pageWidth - (2 * margin);
-      const imgHeight = (img.height * imgWidth) / img.width;
-      pdf.addImage(img, 'JPEG', margin, 40, imgWidth, imgHeight);
-      
-      // Update Y position for next content
-      var yPos = 40 + imgHeight + 10;
-    } catch (error) {
-      console.error('Error adding image to PDF:', error);
-      var yPos = 40;
+    // Add a section title for the gallery
+    pdf.setFontSize(14);
+    pdf.setTextColor(33, 150, 243);
+    pdf.text('Galería de Imágenes:', margin, yPos);
+    yPos += 10;
+    
+    // Calculate image dimensions based on number of images
+    const imgWidth = Math.min((pageWidth - (2 * margin) - (property.images.length > 1 ? 10 : 0)) / Math.min(property.images.length, 2), 85);
+    const maxImgHeight = 70; // Maximum height for each image
+    
+    // Keep track of the row and position within row
+    let rowPos = 0;
+    let currentYPos = yPos;
+    let maxHeightInRow = 0;
+    
+    // Process each image
+    for (let i = 0; i < property.images.length; i++) {
+      try {
+        // Create a temporary image element
+        const img = new Image();
+        img.crossOrigin = 'Anonymous'; // Handle CORS issues
+        img.src = property.images[i];
+        
+        // Wait for image to load
+        await new Promise((resolve) => {
+          img.onload = resolve;
+        });
+        
+        // Calculate height based on aspect ratio, constrained by maxImgHeight
+        const imgHeight = Math.min((img.height * imgWidth) / img.width, maxImgHeight);
+        
+        // Determine x position (margin + position in row * (width + spacing))
+        const xPos = margin + (rowPos * (imgWidth + 5));
+        
+        // Add image to PDF
+        pdf.addImage(img, 'JPEG', xPos, currentYPos, imgWidth, imgHeight);
+        
+        // Update the maximum height in the current row
+        maxHeightInRow = Math.max(maxHeightInRow, imgHeight);
+        
+        // Increase rowPos or move to next row
+        rowPos++;
+        if (rowPos >= 2 || i === property.images.length - 1) {
+          // Move Y position down for next row
+          currentYPos += maxHeightInRow + 5;
+          // Reset row position and max height
+          rowPos = 0;
+          maxHeightInRow = 0;
+        }
+        
+        // Check if we need a new page (if next image would go beyond page limit)
+        if (currentYPos > pageHeight - 50 && i < property.images.length - 1) {
+          pdf.addPage();
+          currentYPos = 20;
+          maxHeightInRow = 0;
+        }
+      } catch (error) {
+        console.error(`Error adding image ${i} to PDF:`, error);
+      }
     }
-  } else {
-    var yPos = 40;
+    
+    // Update Y position for next content, accounting for the gallery
+    yPos = currentYPos + 15;
   }
   
   // Add price
@@ -75,6 +118,12 @@ export const generatePropertyPDF = async (property) => {
   pdf.text(`Construcción: ${property.constructionArea} m²`, margin, yPos);
   yPos += 15;
   
+  // Check if we need a new page for features and description
+  if (yPos > pageHeight - 100) {
+    pdf.addPage();
+    yPos = 20;
+  }
+  
   // Add features section
   pdf.setFontSize(14);
   pdf.setTextColor(33, 150, 243);
@@ -92,6 +141,12 @@ export const generatePropertyPDF = async (property) => {
   }
   yPos += 10;
   
+  // Check if we need a new page for description
+  if (yPos > pageHeight - 80) {
+    pdf.addPage();
+    yPos = 20;
+  }
+  
   // Add description section
   pdf.setFontSize(14);
   pdf.setTextColor(33, 150, 243);
@@ -102,8 +157,21 @@ export const generatePropertyPDF = async (property) => {
   pdf.setFontSize(12);
   pdf.setTextColor(0, 0, 0);
   const splitDescription = pdf.splitTextToSize(property.description, pageWidth - (2 * margin));
+  
+  // Check if description will fit on current page
+  if (yPos + splitDescription.length * 7 > pageHeight - 30) {
+    pdf.addPage();
+    yPos = 20;
+  }
+  
   pdf.text(splitDescription, margin, yPos);
   yPos += splitDescription.length * 7 + 15;
+  
+  // Check if we need a new page for publisher info
+  if (yPos > pageHeight - 40) {
+    pdf.addPage();
+    yPos = 20;
+  }
   
   // Add publisher information
   pdf.setFontSize(12);
@@ -111,14 +179,18 @@ export const generatePropertyPDF = async (property) => {
   pdf.text(`Publicado por: ${property.publisher}`, margin, yPos);
   yPos += 7;
   pdf.text(`Contacto: ${property.contact}`, margin, yPos);
-  yPos += 15;
   
-  // Add footer with Inmobidata info and date
-  pdf.setFontSize(10);
-  pdf.setTextColor(150, 150, 150);
-  const today = new Date().toLocaleDateString('es-MX');
-  pdf.text(`Generado por Inmobidata el ${today}`, margin, pageHeight - 10);
-  pdf.text('www.inmobidata.com', pageWidth - margin, pageHeight - 10, { align: 'right' });
+  // Add footer with Inmobidata info and date on every page
+  const pageCount = pdf.internal.getNumberOfPages();
+  for (let i = 1; i <= pageCount; i++) {
+    pdf.setPage(i);
+    pdf.setFontSize(10);
+    pdf.setTextColor(150, 150, 150);
+    const today = new Date().toLocaleDateString('es-MX');
+    pdf.text(`Generado por Inmobidata el ${today}`, margin, pageHeight - 10);
+    pdf.text(`Página ${i} de ${pageCount}`, pageWidth / 2, pageHeight - 10, { align: 'center' });
+    pdf.text('www.inmobidata.com', pageWidth - margin, pageHeight - 10, { align: 'right' });
+  }
   
   // Save and return the PDF
   return pdf;
@@ -206,14 +278,10 @@ export const downloadMultiplePropertiesPDF = async (properties) => {
   pdf.text(`Generado el: ${today}`, pageWidth / 2, pageHeight / 3 + 30, { align: 'center' });
   pdf.text(`Total de propiedades: ${properties.length}`, pageWidth / 2, pageHeight / 3 + 40, { align: 'center' });
   
-  // Add properties (one per page)
+  // Add properties (one per page for basic info, plus image gallery)
   for (let i = 0; i < properties.length; i++) {
-    // Add new page for each property (except the first which goes after the title)
-    if (i > 0) {
-      pdf.addPage();
-    } else {
-      pdf.addPage();
-    }
+    // Add new page for each property
+    pdf.addPage();
     
     const property = properties[i];
     
@@ -226,28 +294,81 @@ export const downloadMultiplePropertiesPDF = async (properties) => {
     pdf.text(`Propiedad ${i + 1}: ${property.title}`, pageWidth / 2, yPos, { align: 'center' });
     yPos += 15;
     
-    // Add property image if available
+    // Images section - gallery approach
     if (property.images && property.images.length > 0) {
-      try {
-        // Create a temporary image element
-        const img = new Image();
-        img.crossOrigin = 'Anonymous';
-        img.src = property.images[0];
-        
-        await new Promise((resolve) => {
-          img.onload = resolve;
-        });
-        
-        // Add image to PDF
-        const imgWidth = pageWidth - (2 * margin);
-        const imgHeight = (img.height * imgWidth) / img.width;
-        pdf.addImage(img, 'JPEG', margin, yPos, imgWidth, Math.min(imgHeight, 70));
-        
-        // Update Y position for next content
-        yPos += Math.min(imgHeight, 70) + 10;
-      } catch (error) {
-        console.error(`Error adding image for property ${i + 1}:`, error);
+      // Add title for images
+      pdf.setFontSize(14);
+      pdf.setTextColor(33, 150, 243);
+      pdf.text('Fotos de la propiedad:', margin, yPos);
+      yPos += 8;
+      
+      // Calculate image size and layout
+      const maxImagesPerRow = 2;
+      const imgPadding = 5;
+      const imgWidth = (pageWidth - (2 * margin) - (imgPadding * (maxImagesPerRow - 1))) / maxImagesPerRow;
+      const maxImgHeight = 60; // Maximum height per image
+      
+      // Track row position
+      let rowPos = 0;
+      let currentYPos = yPos;
+      let maxHeightInRow = 0;
+      
+      // Process each image
+      for (let j = 0; j < property.images.length; j++) {
+        try {
+          const img = new Image();
+          img.crossOrigin = 'Anonymous';
+          img.src = property.images[j];
+          
+          await new Promise((resolve) => {
+            img.onload = resolve;
+          });
+          
+          // Calculate proportional height, limited by max height
+          const imgHeight = Math.min((img.height * imgWidth) / img.width, maxImgHeight);
+          
+          // X position in the current row
+          const xPos = margin + (rowPos * (imgWidth + imgPadding));
+          
+          // Add image
+          pdf.addImage(img, 'JPEG', xPos, currentYPos, imgWidth, imgHeight);
+          
+          // Update max height in row
+          maxHeightInRow = Math.max(maxHeightInRow, imgHeight);
+          
+          // Move to next position or row
+          rowPos++;
+          if (rowPos >= maxImagesPerRow || j === property.images.length - 1) {
+            // Move down for next row
+            currentYPos += maxHeightInRow + imgPadding;
+            rowPos = 0;
+            maxHeightInRow = 0;
+          }
+          
+          // Check if we need a new page for more images
+          if (currentYPos > pageHeight - 70 && j < property.images.length - 1) {
+            pdf.addPage();
+            currentYPos = 20;
+            
+            // Add continued title on new page
+            pdf.setFontSize(14);
+            pdf.setTextColor(33, 150, 243);
+            pdf.text('Fotos de la propiedad (continuación):', margin, currentYPos);
+            currentYPos += 8;
+          }
+        } catch (error) {
+          console.error(`Error adding image ${j} for property ${i+1}:`, error);
+        }
       }
+      
+      // Update Y position after all images
+      yPos = currentYPos + 10;
+    }
+    
+    // Check if we need a new page for property details
+    if (yPos > pageHeight - 100) {
+      pdf.addPage();
+      yPos = 20;
     }
     
     // Add property details
@@ -266,16 +387,81 @@ export const downloadMultiplePropertiesPDF = async (properties) => {
     pdf.text(`Recámaras: ${property.bedrooms} | Baños: ${property.bathrooms}`, margin, yPos);
     yPos += 7;
     pdf.text(`Terreno: ${property.landArea} m² | Construcción: ${property.constructionArea} m²`, margin, yPos);
-    yPos += 10;
+    yPos += 12;
+    
+    // Add features if available
+    if (property.features && property.features.length > 0) {
+      pdf.setFontSize(14);
+      pdf.setTextColor(33, 150, 243);
+      pdf.text('Características:', margin, yPos);
+      yPos += 7;
+      
+      // Features in a compact format
+      pdf.setFontSize(12);
+      pdf.setTextColor(0, 0, 0);
+      
+      let featuresPerRow = 2;
+      let featureColWidth = (pageWidth - (2 * margin)) / featuresPerRow;
+      
+      for (let j = 0; j < property.features.length; j += featuresPerRow) {
+        let rowText = '';
+        for (let k = 0; k < featuresPerRow && j + k < property.features.length; k++) {
+          rowText = `• ${property.features[j + k]}`;
+          pdf.text(rowText, margin + (k * featureColWidth), yPos);
+        }
+        yPos += 7;
+      }
+      yPos += 5;
+    }
+    
+    // Add property description (shortened if needed)
+    pdf.setFontSize(14);
+    pdf.setTextColor(33, 150, 243);
+    pdf.text('Descripción:', margin, yPos);
+    yPos += 7;
     
     // Add shortened description
     pdf.setFontSize(12);
-    const maxDescLength = 200;
+    pdf.setTextColor(0, 0, 0);
+    
+    // Get available height for description
+    const availableHeight = pageHeight - yPos - 20;
+    const lineHeight = 7; // approximate line height in mm
+    const maxLines = Math.floor(availableHeight / lineHeight);
+    
+    // Split description for text wrapping
+    const maxDescLength = 1000; // Longer limit since we're showing all images
     const shortDesc = property.description.length > maxDescLength 
       ? property.description.substring(0, maxDescLength) + '...' 
       : property.description;
     const splitDescription = pdf.splitTextToSize(shortDesc, pageWidth - (2 * margin));
+    
+    // If it won't fit on current page, add a new page
+    if (splitDescription.length > maxLines) {
+      pdf.addPage();
+      yPos = 20;
+      
+      pdf.setFontSize(14);
+      pdf.setTextColor(33, 150, 243);
+      pdf.text('Descripción (continuación):', margin, yPos);
+      yPos += 7;
+    }
+    
+    pdf.setFontSize(12);
+    pdf.setTextColor(0, 0, 0);
     pdf.text(splitDescription, margin, yPos);
+  }
+  
+  // Add page numbers to all pages
+  const pageCount = pdf.internal.getNumberOfPages();
+  for (let i = 1; i <= pageCount; i++) {
+    pdf.setPage(i);
+    pdf.setFontSize(10);
+    pdf.setTextColor(150, 150, 150);
+    const today = new Date().toLocaleDateString('es-MX');
+    pdf.text(`Generado por Inmobidata el ${today}`, margin, pageHeight - 10);
+    pdf.text(`Página ${i} de ${pageCount}`, pageWidth / 2, pageHeight - 10, { align: 'center' });
+    pdf.text('www.inmobidata.com', pageWidth - margin, pageHeight - 10, { align: 'right' });
   }
   
   // Save the combined PDF
